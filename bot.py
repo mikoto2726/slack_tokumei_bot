@@ -3,6 +3,10 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 import configparser
 import re
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
 app = Flask(__name__)
 
@@ -13,6 +17,25 @@ config.read('config.ini')
 # 設定ファイルからSlackのボットトークンを取得
 SLACK_BOT_TOKEN = config.get('slack', 'bot_token')
 client = WebClient(token=SLACK_BOT_TOKEN)
+
+# データベースの設定
+DATABASE_URL = 'sqlite:///slack_bot.db'
+engine = create_engine(DATABASE_URL)
+Base = declarative_base()
+
+class SlackMessage(Base):
+    __tablename__ = 'slack_messages'
+    id = Column(Integer, primary_key=True)
+    time = Column(DateTime)
+    user_name = Column(String)
+    user_id = Column(String)
+    channel_name = Column(String)
+    channel_id = Column(String)
+    text = Column(Text)
+
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+session = Session()
 
 #URLからチャンネルIDとスレッドタイムスタンプを取得する
 def parse_slack_url(text):
@@ -26,14 +49,36 @@ def parse_slack_url(text):
     else:
         return None, None, text
 
+def get_japan_time():
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST)
+
 @app.route('/tokumei', methods=['POST'])
 def tokumei():
     data = request.form
     text = data.get('text')
     channel_id = data.get('channel_id')
+    channel_name = data.get('channel_name')
+    user_id = data.get('user_id')
+    user_name = data.get('user_name')
+
+    # 日本時間の取得
+    time = get_japan_time()
 
     # URLの解析
     url_channel_id, thread_ts, message = parse_slack_url(text)
+
+    # データベースに保存
+    slack_message = SlackMessage(
+        time=time,
+        user_name=user_name,
+        user_id=user_id,
+        channel_name=channel_name,
+        channel_id=channel_id,
+        text=text
+    )
+    session.add(slack_message)
+    session.commit()
 
     # チャンネルIDとスレッドタイムスタンプが見つかった場合はスレッドに送信
     if url_channel_id and thread_ts:
